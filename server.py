@@ -6,7 +6,10 @@ import asyncio
 import time
 import socket
 import subprocess
+import json
 from pathlib import Path
+from typing import List
+from openpyxl import load_workbook
 from mcp.server.fastmcp import FastMCP
 
 # Message templates
@@ -30,6 +33,19 @@ SERVER_MESSAGES = {
     'error': 'Error: {error}',
     'version': 'data_storage MCP Server v{version}',
 }
+
+CONFIG_FILENAME = "C:\\Users\\sluo_\\workspace\\superbuilder-ces-demo\\demo-configs\\data-storage-config.json"
+SHEET_NAME = "sales_leads"
+FIELDNAMES: List[str] = [
+    "visitor_name",
+    "title",
+    "company",
+    "interests_of_solutions",
+    "interested_in_pilot",
+    "email",
+    "phone_number",
+    "next_steps",
+]
 
 def format_message(key: str, **kwargs) -> str:
     """Format a server message with given parameters."""
@@ -80,12 +96,83 @@ async def example_tool(input_param: str) -> str:
     except Exception as e:
         raise RuntimeError(f"Error in example_tool: {str(e)}")  # Double braces to keep f-string
 
+
+async def save_sales_lead(
+    visitor_name: str,
+    title: str,
+    company: str,
+    interests_of_solutions: str,
+    interested_in_pilot: str,
+    email: str,
+    phone_number: str,
+    next_steps: str,
+) -> str:
+    """
+    Save a sales lead to the configured Excel workbook.
+    """
+    config_path = Path(CONFIG_FILENAME)
+    if not config_path.exists():
+        raise FileNotFoundError(f"Configuration file '{CONFIG_FILENAME}' not found.")
+
+    try:
+        config_data = json.loads(config_path.read_text(encoding="utf-8"))
+    except json.JSONDecodeError as exc:
+        raise ValueError(f"Invalid JSON in '{CONFIG_FILENAME}'.") from exc
+
+    target_value = config_data.get("target_excel_file")
+    if not target_value:
+        raise KeyError(
+            "Missing 'target_excel_file' key in configuration file "
+            f"'{CONFIG_FILENAME}'."
+        )
+
+    target_path = Path(target_value)
+    if not target_path.exists():
+        raise FileNotFoundError(
+            f"Configured Excel file does not exist: '{target_path}'. "
+            "Please create the file before using this tool."
+        )
+
+    if not os.access(target_path, os.W_OK):
+        raise PermissionError(
+            f"No write access to configured Excel file: '{target_path}'."
+        )
+
+    workbook = load_workbook(target_path)
+    if SHEET_NAME in workbook.sheetnames:
+        sheet = workbook[SHEET_NAME]
+    else:
+        sheet = workbook.create_sheet(SHEET_NAME)
+
+    # Add header row if the sheet is empty
+    if sheet.max_row == 1 and all(cell.value is None for cell in sheet[1]):
+        sheet.append(FIELDNAMES)
+
+    row = {
+        "visitor_name": visitor_name,
+        "title": title,
+        "company": company,
+        "interests_of_solutions": interests_of_solutions,
+        "interested_in_pilot": interested_in_pilot,
+        "email": email,
+        "phone_number": phone_number,
+        "next_steps": next_steps,
+    }
+    sheet.append([row[name] for name in FIELDNAMES])
+
+    workbook.save(target_path)
+
+    return (
+        f"Sales lead for '{visitor_name}' saved to '{target_path}' "
+        f"in sheet '{SHEET_NAME}'."
+    )
+
 #### Tool Registration ####
 
 # List of all tool functions to register
 TOOL_FUNCTIONS = [
     example_tool,
-    # Add additional tool functions here
+    save_sales_lead,
 ]
 
 def register_tools(verbose=True):

@@ -5,7 +5,12 @@ import json
 import time
 import subprocess
 import signal
+import asyncio
+import tempfile
 from pathlib import Path
+
+from openpyxl import Workbook, load_workbook
+
 
 class TestData_storageServer(unittest.TestCase):
     @classmethod
@@ -100,6 +105,69 @@ class TestData_storageServer(unittest.TestCase):
             return json.loads(output.strip())
         except json.JSONDecodeError as e:
             self.fail(f"Could not parse JSON from output: {output}\nError: {e}")
+
+
+class TestSaveSalesLead(unittest.TestCase):
+    def setUp(self):
+        # Create a temporary directory with its own config and Excel file
+        self._orig_cwd = os.getcwd()
+        self._tmpdir = tempfile.TemporaryDirectory()
+        os.chdir(self._tmpdir.name)
+
+        self.excel_path = Path(self._tmpdir.name) / "sales_leads_test.xlsx"
+
+        # Create an empty workbook so the file exists and is writable
+        wb = Workbook()
+        wb.save(self.excel_path)
+
+        # Write a config.json that points to the temporary Excel file
+        config_path = Path("config.json")
+        config_data = {"target_excel_file": str(self.excel_path)}
+        config_path.write_text(json.dumps(config_data), encoding="utf-8")
+
+    def tearDown(self):
+        # Restore original working directory and clean up
+        os.chdir(self._orig_cwd)
+        self._tmpdir.cleanup()
+
+    def test_save_sales_lead_appends_row_and_header(self):
+        from server import save_sales_lead, SHEET_NAME, FIELDNAMES
+
+        # Call the async tool
+        asyncio.run(
+            save_sales_lead(
+                visitor_name="Jane Smith",
+                title="CTO",
+                company="Example Inc.",
+                interests_of_solutions="Cloud storage, disaster recovery",
+                interested_in_pilot="yes",
+                email="jane.smith@example.com",
+                phone_number="+1-555-0200",
+                next_steps="Send proposal next week",
+            )
+        )
+
+        # Verify the workbook contents
+        workbook = load_workbook(self.excel_path)
+        sheet = workbook[SHEET_NAME]
+
+        # Header row should match FIELDNAMES
+        header_values = [cell.value for cell in sheet[1]]
+        assert header_values == FIELDNAMES
+
+        # The second row should contain the saved lead data
+        data_row = [cell.value for cell in sheet[2]]
+        expected = [
+            "Jane Smith",
+            "CTO",
+            "Example Inc.",
+            "Cloud storage, disaster recovery",
+            "yes",
+            "jane.smith@example.com",
+            "+1-555-0200",
+            "Send proposal next week",
+        ]
+        assert data_row == expected
 
 if __name__ == '__main__':
     unittest.main()
