@@ -15,6 +15,33 @@ cross-process control, and production-ready deployment capabilities.
   - `MCP_DATA_STORAGE_PROTOCOL`: Override protocol (stdio, sse, http)
   - `MCP_DATA_STORAGE_PORT`: Override default port (only for sse/http protocols - current: 7905)
 
+## JSON Configuration (data storage)
+
+The `save_data` tool reads a JSON configuration file to locate the target Excel workbook and schema.
+
+**Default location (hardcoded):**
+`..\demo-configs\data-storage-config.json` (see `CONFIG_FILENAME` in `server.py`)
+
+**Required fields:**
+- `target_excel_file`: Absolute path to the Excel file to append rows to.
+- `expected_columns`: List of column names expected in the sheet.
+
+**Optional fields:**
+- `sheet_name`: Sheet to use; defaults to `Sheet1` if omitted.
+
+**Example file:**
+```json
+{
+  "target_excel_file": "C:\\path\\to\\demo_test.xlsx",
+  "sheet_name": "patient_visits",
+  "expected_columns": ["patient_name", "reason_for_visit"]
+}
+```
+
+Notes:
+- The Excel file must already exist and be writable.
+- If you want to move the config file, update `CONFIG_FILENAME` in `server.py` to the new path.
+
 ## Quick Start
 
 ### 1. Setup Environment
@@ -120,9 +147,30 @@ Tests validate:
 
 ## Production Deployment
 
-### Building
+### Building the Binary from Source
 
-Create a standalone executable for distribution:
+These steps create `dist\data_storage-mcp-server.exe` using PyInstaller.
+
+```powershell
+# 1) Setup the venv and install dependencies
+.\setup.ps1
+
+# 2) Build the executable
+.\build.ps1
+```
+
+Build output:
+- `dist/data_storage-mcp-server.exe`: Standalone executable
+- `build/`: Build artifacts and dependencies
+- All dependencies bundled via PyInstaller
+
+If you hit build errors, clear artifacts and rebuild:
+```powershell
+Remove-Item -Recurse -Force build, dist -ErrorAction SilentlyContinue
+.\build.ps1
+```
+
+### Building (Batch Alternative)
 
 ```powershell
 # Windows batch build
@@ -131,11 +179,6 @@ Create a standalone executable for distribution:
 # PowerShell build (recommended)
 .\build.ps1
 ```
-
-Build output:
-- `dist/data_storage-mcp-server.exe`: Standalone executable
-- `build/`: Build artifacts and dependencies
-- All dependencies bundled via PyInstaller
 
 ### Distribution
 
