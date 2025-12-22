@@ -8,7 +8,6 @@ import socket
 import subprocess
 import json
 from pathlib import Path
-from typing import List
 from openpyxl import load_workbook
 from mcp.server.fastmcp import FastMCP
 
@@ -35,17 +34,6 @@ SERVER_MESSAGES = {
 }
 
 CONFIG_FILENAME = "C:\\Users\\sluo_\\workspace\\superbuilder-ces-demo\\demo-configs\\data-storage-config.json"
-SHEET_NAME = "sales_leads"
-FIELDNAMES: List[str] = [
-    "visitor_name",
-    "title",
-    "company",
-    "interests_of_solutions",
-    "interested_in_pilot",
-    "email",
-    "phone_number",
-    "next_steps",
-]
 
 def format_message(key: str, **kwargs) -> str:
     """Format a server message with given parameters."""
@@ -81,98 +69,165 @@ _server_start_time = None
 
 #### Server Tools ####
 
-async def example_tool(input_param: str) -> str:
-    """Example tool implementation.
+# async def example_tool(input_param: str) -> str:
+#     """Example tool implementation.
     
+#     Args:
+#         input_param: Description of the input parameter
+    
+#     Returns:
+#         str: Description of the return value
+#     """
+#     try:
+#         # Your tool implementation here
+#         return f"Processed: {input_param}"  # Double braces to keep f-string in output
+#     except Exception as e:
+#         raise RuntimeError(f"Error in example_tool: {str(e)}")  # Double braces to keep f-string
+
+
+def _parse_relaxed_payload(payload: str, expected_columns: list[str]) -> dict:
+    """
+    Parse relaxed key/value payload lines into a dict keyed by expected_columns.
+    Missing columns are filled with 'n/a'.
+    """
+    parsed: dict[str, object] = {}
+    for raw_line in payload.splitlines():
+        line = raw_line.strip()
+        if not line:
+            continue
+
+        if "=" not in line:
+            raise ValueError(f"Invalid line (missing '='): '{raw_line}'")
+
+        left, raw_value = line.split("=", 1)
+        key_part = left.strip()
+        value = raw_value.strip()
+
+        val_type = None
+        if ":" in key_part:
+            key_part, val_type = key_part.split(":", 1)
+            key_part = key_part.strip()
+            val_type = val_type.strip()
+
+        if not key_part:
+            raise ValueError(f"Missing key in line: '{raw_line}'")
+
+        if val_type == "num":
+            cleaned = value.lstrip("$").replace(",", "")
+            try:
+                parsed_value: object = float(cleaned)
+            except ValueError as exc:
+                raise ValueError(f"Expected numeric value for '{key_part}'") from exc
+        elif val_type == "bool":
+            lowered = value.lower()
+            if lowered in {"true", "yes"}:
+                parsed_value = True
+            elif lowered in {"false", "no"}:
+                parsed_value = False
+            else:
+                raise ValueError(f"Expected boolean value for '{key_part}'")
+        else:
+            parsed_value = value
+
+        parsed[key_part] = parsed_value
+
+    return {col: parsed.get(col, "n/a") for col in expected_columns}
+
+
+async def save_data(data_payload_string: str) -> dict:
+    """
+    Append a record to the configured Excel workbook.
     Args:
-        input_param: Description of the input parameter
-    
+        data_payload_string: a text string composed by "key=value" lines representing the record to append.
     Returns:
-        str: Description of the return value
-    """
-    try:
-        # Your tool implementation here
-        return f"Processed: {input_param}"  # Double braces to keep f-string in output
-    except Exception as e:
-        raise RuntimeError(f"Error in example_tool: {str(e)}")  # Double braces to keep f-string
-
-
-async def save_sales_lead(
-    visitor_name: str,
-    title: str,
-    company: str,
-    interests_of_solutions: str,
-    interested_in_pilot: str,
-    email: str,
-    phone_number: str,
-    next_steps: str,
-) -> str:
-    """
-    Save a sales lead to the configured Excel workbook.
+        dict: Result of the operation with either 'sheet_name' and 'record' keys on success,
+              or 'error' key on failure.
     """
     config_path = Path(CONFIG_FILENAME)
     if not config_path.exists():
-        raise FileNotFoundError(f"Configuration file '{CONFIG_FILENAME}' not found.")
+        return {"error": f"Configuration file '{CONFIG_FILENAME}' not found."}
 
     try:
         config_data = json.loads(config_path.read_text(encoding="utf-8"))
     except json.JSONDecodeError as exc:
-        raise ValueError(f"Invalid JSON in '{CONFIG_FILENAME}'.") from exc
+        return {"error": f"Invalid JSON in '{CONFIG_FILENAME}': {exc.msg}."}
 
     target_value = config_data.get("target_excel_file")
     if not target_value:
-        raise KeyError(
-            "Missing 'target_excel_file' key in configuration file "
-            f"'{CONFIG_FILENAME}'."
-        )
+        return {
+            "error": (
+                "Missing 'target_excel_file' key in configuration file "
+                f"'{CONFIG_FILENAME}'."
+            )
+        }
+
+    configured_sheet = config_data.get("sheet_name", "Sheet1")
+    expected_columns = config_data.get("expected_columns")
+    if not expected_columns or not isinstance(expected_columns, list):
+        return {
+            "error": (
+                "Missing or invalid 'expected_columns' list in configuration file "
+                f"'{CONFIG_FILENAME}'."
+            )
+        }
 
     target_path = Path(target_value)
     if not target_path.exists():
-        raise FileNotFoundError(
-            f"Configured Excel file does not exist: '{target_path}'. "
-            "Please create the file before using this tool."
-        )
+        return {
+            "error": (
+                f"Configured Excel file does not exist: '{target_path}'. "
+                "Please create the file before using this tool."
+            )
+        }
 
     if not os.access(target_path, os.W_OK):
-        raise PermissionError(
-            f"No write access to configured Excel file: '{target_path}'."
+        return {"error": f"No write access to configured Excel file: '{target_path}'."}
+
+    try:
+        record = _parse_relaxed_payload(data_payload_string, expected_columns)
+    except ValueError as exc:
+        return {"error": str(exc)}
+
+    try:
+        workbook = load_workbook(target_path)
+        sheet = (
+            workbook[configured_sheet]
+            if configured_sheet in workbook.sheetnames
+            else workbook.create_sheet(configured_sheet)
         )
 
-    workbook = load_workbook(target_path)
-    if SHEET_NAME in workbook.sheetnames:
-        sheet = workbook[SHEET_NAME]
-    else:
-        sheet = workbook.create_sheet(SHEET_NAME)
+        first_row_values = [cell.value for cell in sheet[1]]
+        header = [value for value in first_row_values if value is not None]
+        first_row_empty = all(value is None for value in first_row_values)
 
-    # Add header row if the sheet is empty
-    if sheet.max_row == 1 and all(cell.value is None for cell in sheet[1]):
-        sheet.append(FIELDNAMES)
+        if first_row_empty:
+            header = list(expected_columns)
+            for index, key in enumerate(header, start=1):
+                sheet.cell(row=1, column=index).value = key
+        else:
+            missing_keys = [key for key in expected_columns if key not in header]
+            if missing_keys:
+                header.extend(missing_keys)
+                for index, key in enumerate(header, start=1):
+                    sheet.cell(row=1, column=index).value = key
 
-    row = {
-        "visitor_name": visitor_name,
-        "title": title,
-        "company": company,
-        "interests_of_solutions": interests_of_solutions,
-        "interested_in_pilot": interested_in_pilot,
-        "email": email,
-        "phone_number": phone_number,
-        "next_steps": next_steps,
+        row_values = [record.get(key) for key in header]
+        sheet.append(row_values)
+        workbook.save(target_path)
+    except Exception as exc:  # noqa: BLE001
+        return {"error": str(exc)}
+
+    inserted_list = [{key: record.get(key, "n/a")} for key in header]
+    return {
+        "sheet_name": configured_sheet,
+        "record": inserted_list,
     }
-    sheet.append([row[name] for name in FIELDNAMES])
-
-    workbook.save(target_path)
-
-    return (
-        f"Sales lead for '{visitor_name}' saved to '{target_path}' "
-        f"in sheet '{SHEET_NAME}'."
-    )
 
 #### Tool Registration ####
 
 # List of all tool functions to register
 TOOL_FUNCTIONS = [
-    example_tool,
-    save_sales_lead,
+    save_data,
 ]
 
 def register_tools(verbose=True):
